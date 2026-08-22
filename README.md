@@ -12,7 +12,7 @@ For details, see [Embedding models benchmark for code duplication detection](htt
 
 ### Supported languages
 
-Python, TypeScript, JavaScript, Java, Kotlin, C#, Go, Rust, PHP, Elixir
+Python, TypeScript, JavaScript, Java, Kotlin, C#, Go, Rust, PHP, Elixir, Svelte
 
 ## How it works
 

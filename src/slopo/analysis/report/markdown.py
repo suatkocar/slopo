@@ -11,11 +11,14 @@ _LANG_MAP = {
     ".go": "go",
     ".java": "java",
     ".js": "javascript",
+    ".jsx": "jsx",
     ".kt": "kotlin",
     ".php": "php",
     ".py": "python",
     ".rs": "rust",
+    ".svelte": "svelte",
     ".ts": "typescript",
+    ".tsx": "tsx",
 }
 
 

@@ -16,6 +16,26 @@ fun increment(a: Int): Int {
 }
 """
 
+_TSX = """\
+function increment({ a }: { a: number }): JSX.Element {
+    return <span>{a + 1}</span>;
+}
+"""
+
+_JSX = """\
+function increment({ a }) {
+    return <span>{a + 1}</span>;
+}
+"""
+
+_SVELTE = """\
+<script>
+  function increment(a) {
+    return a + 1;
+  }
+</script>
+"""
+
 
 def test_scans_all_supported_languages(tmp_path: Path):
     (tmp_path / "Calculator.java").write_text(_JAVA)
@@ -35,6 +55,37 @@ def test_parses_units_from_each_language(tmp_path: Path):
 
     assert [u.name for u in java_units] == ["increment"]
     assert [u.name for u in kotlin_units] == ["increment"]
+
+
+def test_scans_tsx_jsx_and_svelte_files(tmp_path: Path):
+    # Guards the registry wiring itself (src/slopo/indexing/parsing/registry.py):
+    # if a fork-specific extension is ever dropped from _REGISTRY, the file
+    # disappears from supported_extensions() and scan_directory silently skips
+    # it, so this must fail rather than pass on a smaller scanned set.
+    (tmp_path / "Increment.tsx").write_text(_TSX)
+    (tmp_path / "Increment.jsx").write_text(_JSX)
+    (tmp_path / "Increment.svelte").write_text(_SVELTE)
+
+    scanned = set(scan_directory(tmp_path, exclude=[]))
+
+    assert scanned == {"Increment.tsx", "Increment.jsx", "Increment.svelte"}
+
+
+def test_parses_units_from_tsx_jsx_and_svelte(tmp_path: Path):
+    # Complements the scan-level test above: parse_file() calls get_parser()
+    # directly, so a missing registry entry raises here even for extensions
+    # that would still pass a supported_extensions()-only check.
+    (tmp_path / "Increment.tsx").write_text(_TSX)
+    (tmp_path / "Increment.jsx").write_text(_JSX)
+    (tmp_path / "Increment.svelte").write_text(_SVELTE)
+
+    tsx_units = parse_file(tmp_path / "Increment.tsx")
+    jsx_units = parse_file(tmp_path / "Increment.jsx")
+    svelte_units = parse_file(tmp_path / "Increment.svelte")
+
+    assert [u.name for u in tsx_units] == ["increment"]
+    assert [u.name for u in jsx_units] == ["increment"]
+    assert [u.name for u in svelte_units] == ["increment"]
 
 
 def test_recurses_into_subdirectories_with_paths_relative_to_root(tmp_path: Path):

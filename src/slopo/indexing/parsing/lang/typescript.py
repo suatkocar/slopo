@@ -6,6 +6,9 @@ from slopo.indexing.parsing.base import CodeUnit, hash_body
 _LANGUAGE = Language(tree_sitter_typescript.language_typescript())
 _PARSER = Parser(_LANGUAGE)
 
+_TSX_LANGUAGE = Language(tree_sitter_typescript.language_tsx())
+_TSX_PARSER = Parser(_TSX_LANGUAGE)
+
 _COMMENT_TYPES = {"comment"}
 
 _UNIT_TYPES = {
@@ -19,6 +22,13 @@ _UNIT_TYPES = {
 
 def parse(source: bytes) -> list[CodeUnit]:
     tree = _PARSER.parse(source)
+    units: list[CodeUnit] = []
+    _collect_units(tree.root_node, source, units)
+    return units
+
+
+def parse_tsx(source: bytes) -> list[CodeUnit]:
+    tree = _TSX_PARSER.parse(source)
     units: list[CodeUnit] = []
     _collect_units(tree.root_node, source, units)
     return units

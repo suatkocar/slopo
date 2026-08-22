@@ -28,6 +28,11 @@ def comments() -> list[CodeUnit]:
     return parse((FIXTURES / "Comments.js").read_bytes())
 
 
+@pytest.fixture
+def component_jsx() -> list[CodeUnit]:
+    return parse((FIXTURES / "Component.jsx").read_bytes())
+
+
 def test_extracts_functions_arrows_and_methods(example):
     assert [u.name for u in example] == [
         "add",
@@ -94,3 +99,22 @@ def test_strips_line_block_and_doc_comments_from_body(comments):
         "  return sum;\n"
         "}"
     )
+
+
+def test_jsx_extracts_function_and_arrow_components(component_jsx):
+    assert [u.name for u in component_jsx] == ["Greeting", "Card"]
+
+
+def test_jsx_function_component_body_and_lines(component_jsx):
+    greeting = next(u for u in component_jsx if u.name == "Greeting")
+    assert greeting.body == (
+        "function Greeting({ name }) {\n  return <h1>Hello, {name}!</h1>;\n}"
+    )
+    assert greeting.start_line == 1
+    assert greeting.end_line == 3
+
+
+def test_jsx_arrow_component_lines(component_jsx):
+    card = next(u for u in component_jsx if u.name == "Card")
+    assert card.start_line == 5
+    assert card.end_line == 12

@@ -142,3 +142,47 @@ int foo() {}
 ```
 """
     )
+
+
+def test_tags_code_fence_by_language_for_tsx_jsx_and_svelte():
+    units = {
+        1: UnitRecord(1, "src/A.tsx", "foo", 10, 20, "const foo = () => {}", "hashA"),
+        2: UnitRecord(2, "src/B.jsx", "bar", 5, 15, "const bar = () => {}", "hashB"),
+        3: UnitRecord(3, "src/C.svelte", "baz", 1, 11, "function baz() {}", "hashC"),
+    }
+    cluster = Cluster([1, 2, 3], 0.95, 0.97)
+
+    markdown = build_cluster_markdown(1, cluster, units, {})
+
+    assert (
+        markdown
+        == """\
+## (1) score 0.95-0.97
+
+Hash: `2960e30a5658`
+
+---
+
+- `src/A.tsx` lines 10-20
+
+```tsx
+const foo = () => {}
+```
+
+---
+
+- `src/B.jsx` lines 5-15
+
+```jsx
+const bar = () => {}
+```
+
+---
+
+- `src/C.svelte` lines 1-11
+
+```svelte
+function baz() {}
+```
+"""
+    )

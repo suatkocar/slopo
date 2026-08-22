@@ -21,12 +21,14 @@ _REGISTRY: dict[str, CodeParser] = {
     ".go": go.parse,
     ".java": java.parse,
     ".js": javascript.parse,
+    ".jsx": javascript.parse,
     ".kt": kotlin.parse,
     ".php": php.parse,
     ".py": python.parse,
     ".rs": rust.parse,
     ".svelte": svelte.parse,
     ".ts": typescript.parse,
+    ".tsx": typescript.parse_tsx,
 }
 
 
