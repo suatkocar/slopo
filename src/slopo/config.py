@@ -6,16 +6,23 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from slopo.indexing.parsing.registry import supported_extensions
+
 
 _CONFIG_TEMPLATE = """\
 # Source directory with code to index.
 # Absolute path, or relative to the current directory.
 source_dir:
 
-# Paths to exclude from indexing, as a YAML list of .gitignore-style patterns
+# Paths to exclude from indexing, as a list of .gitignore-style patterns.
 #source_dir_exclude:
-#  - "**/test/**"
+#  - "test/"
 #  - "*.test.ts"
+
+# When set, only listed extensions are included. Otherwise, all supported files.
+#include_file_extensions:
+#  - .ts
+#  - .py
 
 # Embedding model in LiteLLM format, e.g. "jina_ai/jina-code-embeddings-0.5b"
 # For all supported providers see https://docs.litellm.ai/docs/providers
@@ -35,13 +42,20 @@ class ConfigError(Exception):
     pass
 
 
+class ConfigFileNotFoundError(Exception):
+    def __init__(self, path: Path) -> None:
+        self.path = path
+
+
 @dataclass
 class Config:
     source_dir: Path
     source_dir_exclude: list[str]
+    include_file_extensions: list[str]
     db_file: Path
     report_dir: Path
     ignore_file: Path
+    agent_log_file: Path
     embedding_model: str
     embedding_dimensions: int
     embedding_api_key: str | None
@@ -49,16 +63,17 @@ class Config:
     embedding_batch_size: int
     embedding_batch_chars: int
     embedding_request_delay: int
-    similarity_threshold: float
-    rerank_threshold: float
+    analyze_similarity_threshold: float
+    analyze_rerank_threshold: float
+    review_similarity_threshold: float
+    review_rerank_threshold: float
     body_node_count_threshold: int
+    block_node_count_threshold: int
 
 
 def load_config(path: Path) -> Config:
     if not path.is_file():
-        raise ConfigError(
-            f"no config file found at {path}. Run `slopo init` to create one."
-        )
+        raise ConfigFileNotFoundError(path)
 
     text = path.read_text(encoding="utf-8")
     source = str(path)
@@ -75,9 +90,11 @@ def load_config(path: Path) -> Config:
 _KNOWN_CONFIG_KEYS = {
     "source_dir",
     "source_dir_exclude",
+    "include_file_extensions",
     "db_file",
     "report_dir",
     "ignore_file",
+    "agent_log_file",
     "embedding_model",
     "embedding_dimensions",
     "embedding_api_key",
@@ -85,9 +102,12 @@ _KNOWN_CONFIG_KEYS = {
     "embedding_batch_size",
     "embedding_batch_chars",
     "embedding_request_delay",
-    "similarity_threshold",
-    "rerank_threshold",
+    "analyze_similarity_threshold",
+    "analyze_rerank_threshold",
+    "review_similarity_threshold",
+    "review_rerank_threshold",
     "body_node_count_threshold",
+    "block_node_count_threshold",
 }
 
 
@@ -102,12 +122,18 @@ def parse_config(raw: Any, source: str) -> Config:
     return Config(
         source_dir=_require_path(raw, "source_dir", source),
         source_dir_exclude=_optional_str_list(raw, "source_dir_exclude", source),
+        include_file_extensions=_optional_extension_list(
+            raw, "include_file_extensions", source
+        ),
         db_file=_optional_path(raw, "db_file", source, default=Path("slopo.db")),
         report_dir=_optional_path(
             raw, "report_dir", source, default=Path("slopo-report")
         ),
         ignore_file=_optional_path(
             raw, "ignore_file", source, default=Path("slopo.ignore.txt")
+        ),
+        agent_log_file=_optional_path(
+            raw, "agent_log_file", source, default=Path("slopo.agent.log")
         ),
         embedding_model=_require_str(raw, "embedding_model", source),
         embedding_dimensions=_require_positive_int(raw, "embedding_dimensions", source),
@@ -122,14 +148,23 @@ def parse_config(raw: Any, source: str) -> Config:
         embedding_request_delay=_optional_non_negative_int(
             raw, "embedding_request_delay", source, default=0
         ),
-        similarity_threshold=_optional_positive_float(
-            raw, "similarity_threshold", source, default=0.92
+        analyze_similarity_threshold=_optional_positive_float(
+            raw, "analyze_similarity_threshold", source, default=0.93
         ),
-        rerank_threshold=_optional_positive_float(
-            raw, "rerank_threshold", source, default=0.94
+        analyze_rerank_threshold=_optional_positive_float(
+            raw, "analyze_rerank_threshold", source, default=0.95
+        ),
+        review_similarity_threshold=_optional_positive_float(
+            raw, "review_similarity_threshold", source, default=0.92
+        ),
+        review_rerank_threshold=_optional_positive_float(
+            raw, "review_rerank_threshold", source, default=0.94
         ),
         body_node_count_threshold=_optional_positive_int(
-            raw, "body_node_count_threshold", source, default=10
+            raw, "body_node_count_threshold", source, default=20
+        ),
+        block_node_count_threshold=_optional_positive_int(
+            raw, "block_node_count_threshold", source, default=60
         ),
     )
 
@@ -196,6 +231,18 @@ def _optional_str_list(raw: dict[str, Any], key: str, source: str) -> list[str]:
             )
         items.append(item)
     return items
+
+
+def _optional_extension_list(raw: dict[str, Any], key: str, source: str) -> list[str]:
+    extensions = _optional_str_list(raw, key, source)
+    supported = supported_extensions()
+    for extension in extensions:
+        if extension not in supported:
+            raise ConfigError(
+                f"{source}: '{key}' has unsupported extension {extension!r}."
+                f" Supported: {', '.join(sorted(supported))}"
+            )
+    return extensions
 
 
 _RESERVED_EMBEDDING_PARAMS = ("model", "input", "dimensions", "api_key")

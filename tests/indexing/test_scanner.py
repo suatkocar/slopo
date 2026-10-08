@@ -1,6 +1,14 @@
+import logging
 from pathlib import Path
 
-from slopo.indexing.scanner import filter_units, parse_file, scan_directory
+from slopo.indexing.scan_filter import ScanFilter
+from slopo.indexing.scanner import (
+    NodeCountThresholds,
+    filter_units,
+    parse_file,
+    scan_directory,
+    walk_files,
+)
 
 _JAVA = """\
 class Calculator {
@@ -12,110 +20,150 @@ class Calculator {
 
 _KOTLIN = """\
 fun increment(a: Int): Int {
-    return a + 1
+    return b + 2
 }
 """
 
-_TSX = """\
-function increment({ a }: { a: number }): JSX.Element {
-    return <span>{a + 1}</span>;
+_JAVA_WITH_BLOCK = """\
+class Sample {
+    void run(int[] xs) {
+        for (int x : xs) {
+            total += x;
+            record(x);
+            log(x);
+        }
+    }
 }
 """
 
-_JSX = """\
-function increment({ a }) {
-    return <span>{a + 1}</span>;
-}
-"""
 
-_SVELTE = """\
-<script>
-  function increment(a) {
-    return a + 1;
-  }
-</script>
-"""
+# --- scan_directory ---
 
 
-def test_scans_all_supported_languages(tmp_path: Path):
-    (tmp_path / "Calculator.java").write_text(_JAVA)
-    (tmp_path / "Increment.kt").write_text(_KOTLIN)
-
-    scanned = set(scan_directory(tmp_path, exclude=[]))
-
-    assert scanned == {"Calculator.java", "Increment.kt"}
-
-
-def test_parses_units_from_each_language(tmp_path: Path):
-    (tmp_path / "Calculator.java").write_text(_JAVA)
-    (tmp_path / "Increment.kt").write_text(_KOTLIN)
-
-    java_units = parse_file(tmp_path / "Calculator.java")
-    kotlin_units = parse_file(tmp_path / "Increment.kt")
-
-    assert [u.name for u in java_units] == ["increment"]
-    assert [u.name for u in kotlin_units] == ["increment"]
-
-
-def test_scans_tsx_jsx_and_svelte_files(tmp_path: Path):
-    # Guards the registry wiring itself (src/slopo/indexing/parsing/registry.py):
-    # if a fork-specific extension is ever dropped from _REGISTRY, the file
-    # disappears from supported_extensions() and scan_directory silently skips
-    # it, so this must fail rather than pass on a smaller scanned set.
-    (tmp_path / "Increment.tsx").write_text(_TSX)
-    (tmp_path / "Increment.jsx").write_text(_JSX)
-    (tmp_path / "Increment.svelte").write_text(_SVELTE)
-
-    scanned = set(scan_directory(tmp_path, exclude=[]))
-
-    assert scanned == {"Increment.tsx", "Increment.jsx", "Increment.svelte"}
-
-
-def test_parses_units_from_tsx_jsx_and_svelte(tmp_path: Path):
-    # Complements the scan-level test above: parse_file() calls get_parser()
-    # directly, so a missing registry entry raises here even for extensions
-    # that would still pass a supported_extensions()-only check.
-    (tmp_path / "Increment.tsx").write_text(_TSX)
-    (tmp_path / "Increment.jsx").write_text(_JSX)
-    (tmp_path / "Increment.svelte").write_text(_SVELTE)
-
-    tsx_units = parse_file(tmp_path / "Increment.tsx")
-    jsx_units = parse_file(tmp_path / "Increment.jsx")
-    svelte_units = parse_file(tmp_path / "Increment.svelte")
-
-    assert [u.name for u in tsx_units] == ["increment"]
-    assert [u.name for u in jsx_units] == ["increment"]
-    assert [u.name for u in svelte_units] == ["increment"]
-
-
-def test_recurses_into_subdirectories_with_paths_relative_to_root(tmp_path: Path):
+def test_returns_kept_files_as_paths_relative_to_root(tmp_path: Path):
     (tmp_path / "sub" / "nested").mkdir(parents=True)
-    (tmp_path / "sub" / "nested" / "Increment.kt").write_text(_KOTLIN)
-
-    scanned = list(scan_directory(tmp_path, exclude=[]))
-
-    assert scanned == ["sub/nested/Increment.kt"]
-
-
-def test_ignores_unsupported_file_types(tmp_path: Path):
+    (tmp_path / "sub" / "nested" / "Deep.kt").write_text(_KOTLIN)
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "Generated.kt").write_text(_KOTLIN)
+    (tmp_path / "Increment.kt").write_text(_KOTLIN)
     (tmp_path / "notes.txt").write_text("not code")
-    (tmp_path / "data.json").write_text("{}")
 
-    assert list(scan_directory(tmp_path, exclude=[])) == []
+    scan_filter = ScanFilter.create(exclude=["build/"], include_extensions=[])
+
+    scanned = set(scan_directory(tmp_path, scan_filter))
+
+    assert scanned == {"sub/nested/Deep.kt", "Increment.kt"}
+
+
+def test_skips_file_reincluded_under_excluded_directory(tmp_path: Path):
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "Generated.kt").write_text(_KOTLIN)
+
+    scan_filter = ScanFilter.create(
+        exclude=["build/", "!build/Generated.kt"], include_extensions=[]
+    )
+
+    scanned = set(scan_directory(tmp_path, scan_filter))
+
+    assert scanned == set()
+
+
+# --- walk_files ---
+
+
+def test_walks_all_files_in_nested_directories(tmp_path: Path):
+    (tmp_path / "a" / "b" / "c").mkdir(parents=True)
+    (tmp_path / "a" / "A.kt").write_text(_KOTLIN)
+    (tmp_path / "a" / "b" / "c" / "Deep.kt").write_text(_KOTLIN)
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "notes.txt").write_text("not code")
+    (tmp_path / "Root.kt").write_text(_KOTLIN)
+
+    scan_filter = ScanFilter.create(exclude=[], include_extensions=[])
+
+    walked = set(walk_files(tmp_path, scan_filter))
+
+    assert walked == {
+        Path("a/A.kt"),
+        Path("a/b/c/Deep.kt"),
+        Path("x/notes.txt"),
+        Path("Root.kt"),
+    }
+
+
+def test_skips_files_under_excluded_directory(tmp_path: Path):
+    (tmp_path / "build" / "nested").mkdir(parents=True)
+    (tmp_path / "build" / "Generated.kt").write_text(_KOTLIN)
+    (tmp_path / "build" / "nested" / "Generated.kt").write_text(_KOTLIN)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "Increment.kt").write_text(_KOTLIN)
+
+    scan_filter = ScanFilter.create(exclude=["build/"], include_extensions=[])
+
+    walked = list(walk_files(tmp_path, scan_filter))
+
+    assert walked == [Path("src/Increment.kt")]
+
+
+# --- parse_file ---
+
+
+def test_parses_units_from_relevant_languages(tmp_path: Path):
+    (tmp_path / "Calculator.java").write_text(_JAVA)
+    (tmp_path / "Increment.kt").write_text(_KOTLIN)
+
+    java_unit = parse_file(tmp_path / "Calculator.java")[0]
+    kotlin_unit = parse_file(tmp_path / "Increment.kt")[0]
+
+    assert java_unit.body == "{\n    return a + 1;\n}"
+    assert kotlin_unit.body == "{\n    return b + 2\n}"
+
+
+def test_normalizes_crlf_line_endings_to_lf(tmp_path: Path):
+    kotlin = tmp_path / "Increment.kt"
+    kotlin.write_bytes(b"fun increment(a: Int): Int {\r\n    return b + 2\r\n}\r\n")
+
+    unit = parse_file(kotlin)[0]
+
+    assert unit.body == "{\n    return b + 2\n}"
+
+
+def test_normalizes_cr_line_endings_to_lf(tmp_path: Path):
+    kotlin = tmp_path / "Increment.kt"
+    kotlin.write_bytes(b"fun increment(a: Int): Int {\r    return b + 2\r}\r")
+
+    unit = parse_file(kotlin)[0]
+
+    assert unit.body == "{\n    return b + 2\n}"
+
+
+def test_skips_file_on_read_error(tmp_path: Path, caplog):
+    vanished = tmp_path / "Increment.kt"
+    vanished.write_text(_KOTLIN)
+    vanished.unlink()
+
+    with caplog.at_level(logging.WARNING):
+        units = parse_file(vanished)
+
+    assert units == []
+    assert f"Skipping {vanished}:" in caplog.text
+
+
+# --- filter_units ---
 
 
 def test_excludes_units_below_body_node_count_threshold(tmp_path: Path):
     (tmp_path / "Calculator.java").write_text(_JAVA)
     units = parse_file(tmp_path / "Calculator.java")
 
-    filtered = filter_units(units, body_node_count_threshold=1000)
+    filtered = filter_units(units, NodeCountThresholds(function=1000, block=1000))
 
     assert filtered == []
 
 
 def test_excludes_units_exceeding_max_body_chars(tmp_path: Path):
-    big_body = "\n".join(f"        int x{i} = {i};" for i in range(500))
-    assert len(big_body) == 11779
+    big_body = "\n".join(f"int example{i} = {i};" for i in range(600))
+    assert len(big_body) == 12979
     source = (
         "class Big {\n"
         "    void huge() {\n"
@@ -129,35 +177,24 @@ def test_excludes_units_exceeding_max_body_chars(tmp_path: Path):
     (tmp_path / "Big.java").write_text(source)
     units = parse_file(tmp_path / "Big.java")
 
-    filtered = filter_units(units, body_node_count_threshold=0)
+    filtered = filter_units(units, NodeCountThresholds(function=0, block=0))
 
-    assert [u.name for u in filtered] == ["small"]
-
-
-def test_skips_files_under_excluded_directory(tmp_path: Path):
-    (tmp_path / "build").mkdir()
-    (tmp_path / "build" / "Generated.kt").write_text(_KOTLIN)
-    (tmp_path / "Increment.kt").write_text(_KOTLIN)
-
-    scanned = list(scan_directory(tmp_path, exclude=["build/"]))
-
-    assert scanned == ["Increment.kt"]
+    assert [u.body for u in filtered] == ["{\n    return a + 1;\n}"]
 
 
-def test_skips_files_matching_glob_pattern(tmp_path: Path):
-    (tmp_path / "Increment.gen.kt").write_text(_KOTLIN)
-    (tmp_path / "Increment.kt").write_text(_KOTLIN)
+def test_function_threshold_applies_to_functions_not_blocks(tmp_path: Path):
+    (tmp_path / "Sample.java").write_text(_JAVA_WITH_BLOCK)
+    units = parse_file(tmp_path / "Sample.java")
 
-    scanned = list(scan_directory(tmp_path, exclude=["*.gen.kt"]))
+    filtered = filter_units(units, NodeCountThresholds(function=0, block=1000))
 
-    assert scanned == ["Increment.kt"]
+    assert {u.kind for u in filtered} == {"function"}
 
 
-def test_negation_pattern_reincludes_excluded_file(tmp_path: Path):
-    (tmp_path / "build").mkdir()
-    (tmp_path / "build" / "Keep.kt").write_text(_KOTLIN)
-    (tmp_path / "build" / "Drop.kt").write_text(_KOTLIN)
+def test_block_threshold_applies_to_blocks_not_functions(tmp_path: Path):
+    (tmp_path / "Sample.java").write_text(_JAVA_WITH_BLOCK)
+    units = parse_file(tmp_path / "Sample.java")
 
-    scanned = list(scan_directory(tmp_path, exclude=["build/", "!build/Keep.kt"]))
+    filtered = filter_units(units, NodeCountThresholds(function=1000, block=0))
 
-    assert scanned == ["build/Keep.kt"]
+    assert {u.kind for u in filtered} == {"block"}

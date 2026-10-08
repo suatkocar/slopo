@@ -31,6 +31,7 @@ def test_returns_config_with_defaults_when_only_required_fields_present():
     assert cfg.db_file == Path("slopo.db")
     assert cfg.report_dir == Path("slopo-report")
     assert cfg.ignore_file == Path("slopo.ignore.txt")
+    assert cfg.agent_log_file == Path("slopo.agent.log")
     assert cfg.embedding_model == "voyage/voyage-code-3"
     assert cfg.embedding_dimensions == 1024
     assert cfg.embedding_api_key == "test-key-12345"
@@ -38,24 +39,27 @@ def test_returns_config_with_defaults_when_only_required_fields_present():
     assert cfg.embedding_batch_size == 100
     assert cfg.embedding_batch_chars == 100_000
     assert cfg.embedding_request_delay == 0
-    assert cfg.similarity_threshold == 0.92
-    assert cfg.rerank_threshold == 0.94
-    assert cfg.body_node_count_threshold == 10
+    assert cfg.analyze_similarity_threshold == 0.93
+    assert cfg.analyze_rerank_threshold == 0.95
+    assert cfg.review_similarity_threshold == 0.92
+    assert cfg.review_rerank_threshold == 0.94
+    assert cfg.body_node_count_threshold == 20
+    assert cfg.block_node_count_threshold == 60
 
 
 def test_overrides_defaults_when_optional_fields_present():
     cfg = parse_config(
         _minimal_raw(
             embedding_batch_size=50,
-            similarity_threshold=0.85,
-            rerank_threshold=0.95,
+            analyze_similarity_threshold=0.85,
+            review_rerank_threshold=0.99,
         ),
         source="<test>",
     )
 
     assert cfg.embedding_batch_size == 50
-    assert cfg.similarity_threshold == 0.85
-    assert cfg.rerank_threshold == 0.95
+    assert cfg.analyze_similarity_threshold == 0.85
+    assert cfg.review_rerank_threshold == 0.99
 
 
 # --- field validation ---
@@ -96,9 +100,9 @@ def test_negative_optional_int_rejected():
 
 def test_wrong_type_optional_float_rejected():
     with pytest.raises(
-        ConfigError, match="'similarity_threshold' must be a number, got '0.9'"
+        ConfigError, match="'analyze_similarity_threshold' must be a number, got '0.9'"
     ):
-        parse_config(_minimal_raw(similarity_threshold="0.9"), source="<test>")
+        parse_config(_minimal_raw(analyze_similarity_threshold="0.9"), source="<test>")
 
 
 def test_unrecognized_key_rejected():
@@ -192,6 +196,28 @@ def test_source_dir_exclude_empty_string_item_rejected():
         parse_config(_minimal_raw(source_dir_exclude=[""]), source="<test>")
 
 
+# --- include_file_extensions ---
+
+
+def test_include_file_extensions_defaults_to_empty_list_when_absent():
+    cfg = parse_config(_minimal_raw(), source="<test>")
+    assert cfg.include_file_extensions == []
+
+
+def test_include_file_extensions_parsed_as_list_of_extensions():
+    cfg = parse_config(
+        _minimal_raw(include_file_extensions=[".py", ".kt"]), source="<test>"
+    )
+    assert cfg.include_file_extensions == [".py", ".kt"]
+
+
+def test_include_file_extensions_unsupported_extension_rejected():
+    with pytest.raises(
+        ConfigError, match="'include_file_extensions' has unsupported extension '.txt'"
+    ):
+        parse_config(_minimal_raw(include_file_extensions=[".txt"]), source="<test>")
+
+
 # --- path overrides ---
 
 
@@ -201,12 +227,14 @@ def test_path_fields_parsed_from_config():
             db_file="custom.db",
             report_dir="reports",
             ignore_file="skip.txt",
+            agent_log_file="custom.log",
         ),
         source="<test>",
     )
     assert cfg.db_file == Path("custom.db")
     assert cfg.report_dir == Path("reports")
     assert cfg.ignore_file == Path("skip.txt")
+    assert cfg.agent_log_file == Path("custom.log")
 
 
 # --- API key ---

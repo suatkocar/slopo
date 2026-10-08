@@ -12,7 +12,13 @@ from slopo.indexing.db import (
     update_file_mtime,
     IndexedFile,
 )
-from slopo.indexing.scanner import filter_units, parse_file, scan_directory
+from slopo.indexing.scan_filter import ScanFilter
+from slopo.indexing.scanner import (
+    NodeCountThresholds,
+    filter_units,
+    parse_file,
+    scan_directory,
+)
 
 
 @dataclass
@@ -26,8 +32,8 @@ class SyncStats:
 def sync_index(
     conn: sqlite3.Connection,
     directory: Path,
-    body_node_count_threshold: int,
-    exclude: list[str],
+    thresholds: NodeCountThresholds,
+    scan_filter: ScanFilter,
 ) -> SyncStats:
     indexed_files = 0
     skipped_files = 0
@@ -36,7 +42,7 @@ def sync_index(
     indexed: dict[str, IndexedFile] = list_indexed_files(conn)
     seen_paths: set[str] = set()
 
-    for path_str in scan_directory(directory, exclude):
+    for path_str in scan_directory(directory, scan_filter):
         seen_paths.add(path_str)
         full_path: Path = directory / path_str
         mtime = full_path.stat().st_mtime
@@ -47,7 +53,7 @@ def sync_index(
             continue
 
         units = parse_file(full_path)
-        units = filter_units(units, body_node_count_threshold)
+        units = filter_units(units, thresholds)
 
         if existing is None:
             file_id = insert_file(conn, path_str, mtime)
@@ -66,6 +72,8 @@ def sync_index(
             removed_ids.append(indexed_file.id)
     delete_files(conn, removed_ids)
 
+    # Remove embeddings after the same code unit has been re-added,
+    # so only real modifications need to be embedded.
     prune_orphan_embeddings(conn)
 
     return SyncStats(
