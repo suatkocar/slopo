@@ -1,7 +1,10 @@
+import random
+
 from slopo.result.clustering import (
     build_clusters,
     cluster_pairs,
     filter_clusters,
+    pairs_by_cluster,
     reorder_clusters,
     sort_cluster,
 )
@@ -38,6 +41,57 @@ def test_transitive_chain_merges_into_one_cluster():
 def test_star_topology_forms_one_cluster():
     pairs = [pair(1, 2, 0.9), pair(1, 3, 0.85), pair(1, 4, 0.8)]
     assert cluster_pairs(pairs) == [{1, 2, 3, 4}]
+
+
+def test_clusters_are_ordered_by_the_last_pair_that_joined_them():
+    # 1-5 joins {1, 2} after {3, 4} formed, so {1, 2, 5} comes last.
+    pairs = [pair(1, 2, 0.9), pair(3, 4, 0.85), pair(1, 5, 0.8)]
+    assert cluster_pairs(pairs) == [{3, 4}, {1, 2, 5}]
+
+
+def _merged_one_pair_at_a_time(pairs: list[SimilarPair]) -> list[set[int]]:
+    # The grouping cluster_pairs replaced: every pair merges every group it
+    # touches and moves the merged group to the end.
+    groups: list[set[int]] = []
+    for p in pairs:
+        matching = [g for g in groups if p.unit_id_a in g or p.unit_id_b in g]
+        merged = {p.unit_id_a, p.unit_id_b}.union(*matching)
+        groups = [g for g in groups if g not in matching] + [merged]
+    return groups
+
+
+def test_cluster_pairs_matches_merging_one_pair_at_a_time():
+    generator = random.Random(7)
+    for _ in range(50):
+        pairs = [
+            pair(generator.randrange(60), generator.randrange(60, 120), 0.9)
+            for _ in range(generator.randrange(1, 90))
+        ]
+        assert cluster_pairs(pairs) == _merged_one_pair_at_a_time(pairs)
+
+
+# --- pairs_by_cluster ---
+
+
+def test_pairs_by_cluster_keeps_pair_order_within_each_cluster():
+    clusters = [
+        Cluster(unit_ids=[1, 2, 3], min_similarity=0.8, max_similarity=0.9),
+        Cluster(unit_ids=[4, 5], min_similarity=0.7, max_similarity=0.7),
+    ]
+    pairs = [pair(2, 3, 0.8), pair(4, 5, 0.7), pair(1, 2, 0.9)]
+    assert pairs_by_cluster(clusters, pairs) == [
+        [pair(2, 3, 0.8), pair(1, 2, 0.9)],
+        [pair(4, 5, 0.7)],
+    ]
+
+
+def test_pairs_by_cluster_drops_pairs_across_clusters_and_removed_units():
+    clusters = [
+        Cluster(unit_ids=[1, 2], min_similarity=0.9, max_similarity=0.9),
+        Cluster(unit_ids=[3, 4], min_similarity=0.9, max_similarity=0.9),
+    ]
+    pairs = [pair(2, 3, 0.95), pair(1, 9, 0.9), pair(3, 4, 0.9)]
+    assert pairs_by_cluster(clusters, pairs) == [[], [pair(3, 4, 0.9)]]
 
 
 # --- sort_cluster ---

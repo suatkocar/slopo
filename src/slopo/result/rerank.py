@@ -1,6 +1,7 @@
 from pathlib import PurePosixPath
 
 from slopo.result import boost
+from slopo.result.clustering import pairs_by_cluster
 from slopo.result.models import Cluster, SimilarPair, UnitRecord
 
 
@@ -52,11 +53,7 @@ def rerank_all_clusters(
     units: dict[int, UnitRecord],
 ) -> list[SimilarPair]:
     reranked: list[SimilarPair] = []
-    for cluster in clusters:
-        members = set(cluster.unit_ids)
-        in_cluster = [
-            p for p in pairs if p.unit_id_a in members and p.unit_id_b in members
-        ]
+    for in_cluster in pairs_by_cluster(clusters, pairs):
         reranked.extend(rerank_cluster_pairs(in_cluster, units))
     return reranked
 

@@ -3,25 +3,59 @@ from slopo.result.models import Cluster, SimilarPair
 
 def cluster_pairs(pairs: list[SimilarPair]) -> list[set[int]]:
     # Groups unit IDs into clusters by transitive similarity: if A~B and B~C,
-    # all three end up in the same set. Each set in the result is one cluster.
-    groups: list[set[int]] = []
+    # all three end up in the same set. Each set in the result is one cluster,
+    # ordered by the last pair that joined it. A union-find keeps this linear in
+    # the number of pairs. Scanning every group for every pair, and every pair
+    # for every group afterwards, grew with their product: analyzing 34k units,
+    # most of them exact copies, took 87 s that way and 7.7 s with this and
+    # pairs_by_cluster, for an identical report (M3 Max, 2026-10-10).
+    parent: dict[int, int] = {}
+    size: dict[int, int] = {}
+    last_pair: dict[int, int] = {}
 
-    for pair in pairs:
-        a, b = pair.unit_id_a, pair.unit_id_b
-        matching = [g for g in groups if a in g or b in g]
+    def find(unit: int) -> int:
+        root = unit
+        while parent[root] != root:
+            root = parent[root]
+        while parent[unit] != root:
+            parent[unit], unit = root, parent[unit]
+        return root
 
-        if not matching:
-            groups.append({a, b})
-        else:
-            merged: set[int] = set()
-            for g in matching:
-                merged |= g
-            merged |= {a, b}
-            for g in matching:
-                groups.remove(g)
-            groups.append(merged)
+    for index, pair in enumerate(pairs):
+        for unit in (pair.unit_id_a, pair.unit_id_b):
+            if unit not in parent:
+                parent[unit] = unit
+                size[unit] = 1
+        a, b = find(pair.unit_id_a), find(pair.unit_id_b)
+        if a != b:
+            if size[a] < size[b]:
+                a, b = b, a
+            parent[b] = a
+            size[a] += size[b]
+        last_pair[a] = index
 
-    return groups
+    groups: dict[int, set[int]] = {}
+    for unit in parent:
+        groups.setdefault(find(unit), set()).add(unit)
+    return [groups[root] for root in sorted(groups, key=lambda root: last_pair[root])]
+
+
+def pairs_by_cluster(
+    clusters: list[Cluster], pairs: list[SimilarPair]
+) -> list[list[SimilarPair]]:
+    # The pairs whose two units both belong to each cluster, in their order,
+    # found in one pass over the pairs instead of one pass per cluster.
+    clusters_of: dict[int, list[int]] = {}
+    for number, cluster in enumerate(clusters):
+        for uid in cluster.unit_ids:
+            clusters_of.setdefault(uid, []).append(number)
+    found: list[list[SimilarPair]] = [[] for _ in clusters]
+    for p in pairs:
+        both = clusters_of.get(p.unit_id_b, [])
+        for number in clusters_of.get(p.unit_id_a, []):
+            if number in both:
+                found[number].append(p)
+    return found
 
 
 def sort_cluster(unit_ids: set[int], pairs: list[SimilarPair]) -> list[int]:
@@ -69,13 +103,9 @@ def reorder_clusters(
     clusters: list[Cluster], reranked_pairs: list[SimilarPair]
 ) -> list[Cluster]:
     result: list[Cluster] = []
-    for cluster in clusters:
+    found = pairs_by_cluster(clusters, reranked_pairs)
+    for cluster, in_cluster in zip(clusters, found):
         members = set(cluster.unit_ids)
-        in_cluster = [
-            p
-            for p in reranked_pairs
-            if p.unit_id_a in members and p.unit_id_b in members
-        ]
         ordered = sort_cluster(members, in_cluster)
         sims = [p.similarity for p in in_cluster]
         min_sim = min(sims)
@@ -95,14 +125,15 @@ def build_clusters(pairs: list[SimilarPair]) -> list[Cluster]:
     raw_groups = cluster_pairs(pairs)
     clusters: list[Cluster] = []
 
-    for group in raw_groups:
-        ordered = sort_cluster(group, pairs)
-        group_set = set(group)
-        group_sims = [
-            p.similarity
-            for p in pairs
-            if p.unit_id_a in group_set and p.unit_id_b in group_set
-        ]
+    # Every pair joins its two units, so it belongs to exactly one group.
+    group_of = {uid: number for number, group in enumerate(raw_groups) for uid in group}
+    group_pairs: list[list[SimilarPair]] = [[] for _ in raw_groups]
+    for p in pairs:
+        group_pairs[group_of[p.unit_id_a]].append(p)
+
+    for group, in_group in zip(raw_groups, group_pairs):
+        ordered = sort_cluster(group, in_group)
+        group_sims = [p.similarity for p in in_group]
         min_sim = min(group_sims)
         max_sim = max(group_sims)
         clusters.append(
